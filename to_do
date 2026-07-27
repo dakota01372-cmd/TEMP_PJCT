@@ -1,0 +1,279 @@
+# notes re editing local wizard setup for testing and data erasure:
+
+# 'Tiger_setup_wizard'
+
+# """
+TigerMemory Setup Wizard
+------------------------
+Run this on first launch to configure installation paths.
+Can be chained into a larger setup wizard sequence.
+"""
+
+import os
+import sys
+import json
+import re
+import shutil
+from pathlib import Path
+
+# ─────────────────────────────────────────────
+# CONFIGURATION
+# ─────────────────────────────────────────────
+
+# File extensions to scan and patch paths in
+PATCHABLE_EXTENSIONS = [
+    ".py", ".txt", ".md", ".json", ".yaml", ".yml",
+    ".cfg", ".ini", ".env", ".bat", ".sh", ".toml"
+]
+
+# Folders to skip entirely (never patch these)
+SKIP_FOLDERS = {
+    ".git", "__pycache__", "node_modules", ".venv",
+    "venv", "env", ".env", "dist", "build"
+}
+
+# Config file where chosen path is saved
+CONFIG_FILE = "tiger_config.json"
+
+# Placeholder token used in your docs/code
+# Replace this with whatever placeholder you used, e.g. {{TIGER_PATH}}
+PATH_PLACEHOLDER = "{{TIGER_PATH}}"
+
+
+# ─────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────
+
+def clear():
+    os.system("cls" if os.name == "nt" else "clear")
+
+
+def banner():
+    print("=" * 55)
+    print("        🐯  TigerMemory Setup Wizard  🐯")
+    print("=" * 55)
+    print()
+
+
+def already_configured():
+    """Check if setup has already been run."""
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as f:
+            config = json.load(f)
+        return config.get("install_path"), config.get("setup_complete", False)
+    return None, False
+
+
+def save_config(install_path: str):
+    """Save chosen path to config file."""
+    config = {
+        "install_path": install_path,
+        "setup_complete": True
+    }
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=4)
+    print(f"\n  ✅ Config saved to: {CONFIG_FILE}")
+
+
+def prompt_install_path() -> str:
+    """Ask user where they want TigerMemory installed/rooted."""
+    print("  Where would you like TigerMemory to be located?")
+    print()
+    print("  Examples:")
+    if os.name == "nt":
+        print("    C:\\Projects\\TigerMemory")
+        print("    D:\\MyApps\\TigerMemory")
+    else:
+        print("    /home/yourname/TigerMemory")
+        print("    ~/Projects/TigerMemory")
+    print()
+
+    while True:
+        raw = input("  Enter path (or press Enter to use current directory): ").strip()
+
+        # Default to current directory
+        if raw == "":
+            chosen = str(Path.cwd())
+            print(f"\n  Using current directory: {chosen}")
+        else:
+            chosen = raw
+
+        # Expand ~ on Unix
+        chosen = os.path.expanduser(chosen)
+        chosen = os.path.normpath(chosen)
+
+        # Confirm with user
+        print(f"\n  You entered: {chosen}")
+        confirm = input("  Is this correct? (y/n): ").strip().lower()
+
+        if confirm == "y":
+            return chosen
+        else:
+            print("\n  Let's try again...\n")
+
+
+def find_patchable_files(root: str) -> list:
+    """Walk project directory and find all patchable files."""
+    patchable = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Remove skip folders in-place so os.walk doesn't descend into them
+        dirnames[:] = [d for d in dirnames if d not in SKIP_FOLDERS]
+
+        for filename in filenames:
+            ext = Path(filename).suffix.lower()
+            if ext in PATCHABLE_EXTENSIONS:
+                full_path = os.path.join(dirpath, filename)
+                # Skip the config file and this script itself
+                if filename not in (CONFIG_FILE, os.path.basename(__file__)):
+                    patchable.append(full_path)
+
+    return patchable
+
+
+def patch_file(filepath: str, install_path: str, hardcoded_paths: list) -> bool:
+    """
+    Replace all hardcoded paths AND placeholders in a file.
+    Returns True if file was modified.
+    """
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+
+        original = content
+
+        # 1. Replace placeholder token
+        content = content.replace(PATH_PLACEHOLDER, install_path)
+
+        # 2. Replace any known hardcoded paths
+        for old_path in hardcoded_paths:
+            if old_path and old_path in content:
+                content = content.replace(old_path, install_path)
+
+        if content != original:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(content)
+            return True
+
+        return False
+
+    except Exception as e:
+        print(f"  ⚠️  Could not patch {filepath}: {e}")
+        return False
+
+
+def patch_all_files(install_path: str, hardcoded_paths: list):
+    """Find and patch all files in the project."""
+    root = str(Path.cwd())
+    files = find_patchable_files(root)
+
+    print(f"\n  🔍 Scanning {len(files)} files for paths to update...\n")
+
+    patched_count = 0
+    for filepath in files:
+        relative = os.path.relpath(filepath, root)
+        was_patched = patch_file(filepath, install_path, hardcoded_paths)
+        if was_patched:
+            print(f"  ✏️  Patched: {relative}")
+            patched_count += 1
+
+    print(f"\n  ✅ Done! {patched_count} file(s) updated.")
+
+
+def ask_for_known_hardcoded_paths() -> list:
+    """
+    Optionally let user tell us what old hardcoded paths to replace.
+    This handles cases where placeholder tokens weren't used.
+    """
+    print()
+    print("  ─────────────────────────────────────────────")
+    print("  Do you have any OLD hardcoded paths already")
+    print("  in your files that need replacing?")
+    print("  (e.g. C:\\Users\\dakota\\TigerMemory)")
+    print("  ─────────────────────────────────────────────")
+    print()
+    answer = input("  Enter old path (or press Enter to skip): ").strip()
+
+    paths = []
+    while answer:
+        paths.append(os.path.normpath(answer))
+        answer = input("  Add another? (or press Enter to continue): ").strip()
+
+    return paths
+
+
+def create_directory_if_needed(install_path: str):
+    """Offer to create the install directory if it doesn't exist."""
+    if not os.path.exists(install_path):
+        print(f"\n  ⚠️  Directory does not exist: {install_path}")
+        create = input("  Create it now? (y/n): ").strip().lower()
+        if create == "y":
+            try:
+                os.makedirs(install_path, exist_ok=True)
+                print(f"  ✅ Created: {install_path}")
+            except Exception as e:
+                print(f"  ❌ Could not create directory: {e}")
+                sys.exit(1)
+
+
+# ─────────────────────────────────────────────
+# MAIN WIZARD FLOW
+# ─────────────────────────────────────────────
+
+def run_wizard():
+    clear()
+    banner()
+
+    # ── Step 1: Check if already configured ──
+    existing_path, already_done = already_configured()
+    if already_done:
+        print(f"  ℹ️  TigerMemory is already configured.")
+        print(f"  📁 Current install path: {existing_path}")
+        print()
+        rerun = input("  Re-run setup anyway? (y/n): ").strip().lower()
+        if rerun != "y":
+            print("\n  Setup skipped. Exiting.\n")
+            return existing_path   # Return path for chaining
+        print()
+
+    # ── Step 2: Get install path from user ──
+    print("  STEP 1 of 3 — Choose Installation Location")
+    print()
+    install_path = prompt_install_path()
+
+    # ── Step 3: Create directory if needed ──
+    create_directory_if_needed(install_path)
+
+    # ── Step 4: Ask about existing hardcoded paths ──
+    print("\n\n  STEP 2 of 3 — Identify Old Hardcoded Paths")
+    hardcoded_paths = ask_for_known_hardcoded_paths()
+
+    # ── Step 5: Patch all files ──
+    print("\n\n  STEP 3 of 3 — Patching Project Files")
+    patch_all_files(install_path, hardcoded_paths)
+
+    # ── Step 6: Save config ──
+    save_config(install_path)
+
+    # ── Done ──
+    print()
+    print("=" * 55)
+    print("  🎉 TigerMemory setup complete!")
+    print(f"  📁 Install path: {install_path}")
+    print("=" * 55)
+    print()
+
+    return install_path  # ← Return for chaining into larger wizard
+
+
+# ─────────────────────────────────────────────
+# ENTRY POINT
+# ─────────────────────────────────────────────
+
+if __name__ == "__main__":
+    chosen_path = run_wizard()
+
+    # ── CHAIN HOOK ──
+    # If you have a next step in your wizard chain, call it here:
+    # e.g. import next_setup_step; next_setup_step.run(chosen_path)
+
+    input("\n  Press Enter to exit...")

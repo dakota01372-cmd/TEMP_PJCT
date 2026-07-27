@@ -1,1 +1,3053 @@
+FOLDER TITLE: 'docs'
+
+FIRST ITEM: 'API_REFERENCE.md' 
+=
+# TigerMemory API Reference
+
+**Complete function documentation for developers**
+
+---
+
+## Table of Contents
+
+1. [database module](#database-module)
+2. [scanner module](#scanner-module)
+3. [search module](#search-module)
+4. [export module](#export-module)
+
+---
+
+## database module
+
+File: `src/database.py`
+
+Handles all database operations using SQLite.
+
+### Class: TigerMemoryDB
+
+Main database interface class.
+
+#### `__init__(db_path: Path = DATABASE_PATH)`
+
+Initialize database connection.
+
+**Parameters:**
+- `db_path` (Path): Path to database file. Defaults to `data/tigermemory.db`
+
+**Example:**
+```python
+from src.database import TigerMemoryDB
+from pathlib import Path
+
+db = TigerMemoryDB(Path("data/test.db"))
+```
+
+---
+
+#### `connect() -> sqlite3.Connection`
+
+Create a database connection.
+
+**Returns:**
+- `sqlite3.Connection`: Active database connection
+
+**Example:**
+```python
+db = TigerMemoryDB()
+conn = db.connect()
+cursor = conn.cursor()
+cursor.execute("SELECT COUNT(*) FROM files")
+count = cursor.fetchone()[0]
+conn.close()
+```
+
+---
+
+#### `init_schema() -> bool`
+
+Create database schema (tables and indices) if not already exists.
+
+**Returns:**
+- `True`: If schema was newly created
+- `False`: If schema already exists
+
+**Creates:**
+- `files` table with metadata columns
+- `metadata` table for key-value storage
+- Indices for fast queries
+
+**Example:**
+```python
+from src import database
+
+result = database.init()  # Using module-level function
+if result:
+    print("Database initialized!")
+else:
+    print("Database already exists")
+```
+
+---
+
+#### `add_file(path, filename, extension, size, file_type, modified_date, created_date=None) -> int`
+
+Add or update a file record in the database.
+
+**Parameters:**
+- `path` (str): Full file path
+- `filename` (str): Just the filename
+- `extension` (str): File extension, e.g., `.pdf`
+- `size` (int): File size in bytes
+- `file_type` (str): Category, e.g., `document`, `image`
+- `modified_date` (datetime): Last modified timestamp
+- `created_date` (datetime, optional): Created timestamp
+
+**Returns:**
+- `int`: File ID if successful, `-1` on error
+
+**Example:**
+```python
+from src.database import TigerMemoryDB
+from datetime import datetime
+from pathlib import Path
+
+db = TigerMemoryDB()
+db.init_schema()
+
+file_id = db.add_file(
+    path="/home/user/documents/report.pdf",
+    filename="report.pdf",
+    extension=".pdf",
+    size=2048576,
+    file_type="document",
+    modified_date=datetime.now(),
+    created_date=datetime(2024, 1, 1),
+)
+
+print(f"Saved as ID: {file_id}")
+```
+
+---
+
+#### `search_files(query, file_type=None, extension=None, limit=100) -> List[Dict]`
+
+Search for files with optional filters.
+
+**Parameters:**
+- `query` (str): Search term (matches filename). Empty string to skip name filtering.
+- `file_type` (str, optional): Filter by file type, e.g., `image`
+- `extension` (str, optional): Filter by extension, e.g., `.pdf`
+- `limit` (int): Maximum results to return. Default: 100
+
+**Returns:**
+- `List[Dict]`: List of matching file records
+
+**Example:**
+```python
+from src.database import TigerMemoryDB
+
+db = TigerMemoryDB()
+
+# Search by name
+results = db.search_files("budget", limit=50)
+
+# Filter by type
+results = db.search_files("", file_type="image", limit=100)
+
+# Filter by extension
+results = db.search_files("", extension=".pdf", limit=50)
+
+# Combine filters
+results = db.search_files("report", file_type="document", extension=".pdf")
+
+for file_record in results:
+    print(f"{file_record['filename']} - {file_record['size']} bytes")
+```
+
+---
+
+#### `get_stats() -> Dict`
+
+Get database statistics.
+
+**Returns:**
+- `Dict`: Statistics dictionary with keys:
+  - `total_files` (int): Total indexed files
+  - `total_size_bytes` (int): Total size of all files
+  - `by_file_type` (Dict): Count by file type
+  - `database_path` (str): Path to database file
+
+**Example:**
+```python
+from src import database
+
+stats = database.stats()
+print(f"Total files: {stats['total_files']}")
+print(f"Total size: {stats['total_size_bytes'] / (1024*1024):.2f} MB")
+print(f"By type: {stats['by_file_type']}")
+```
+
+---
+
+### Module-Level Functions
+
+These are convenience functions that use a module-level `_db` instance.
+
+#### `init() -> bool`
+
+Initialize database schema.
+
+**Example:**
+```python
+from src import database
+
+database.init()
+```
+
+---
+
+#### `add_file(path, filename, extension, size, file_type, modified_date, created_date=None) -> int`
+
+Add file to index.
+
+**Example:**
+```python
+from src import database
+from datetime import datetime
+
+file_id = database.add_file(
+    path="/path/to/file.txt",
+    filename="file.txt",
+    extension=".txt",
+    size=512,
+    file_type="document",
+    modified_date=datetime.now(),
+)
+```
+
+---
+
+#### `search(query, file_type=None, extension=None, limit=100) -> List[Dict]`
+
+Search indexed files.
+
+**Example:**
+```python
+from src import database
+
+results = database.search("report", file_type="document")
+```
+
+---
+
+#### `stats() -> Dict`
+
+Get database statistics.
+
+**Example:**
+```python
+from src import database
+
+stats = database.stats()
+```
+
+---
+
+## scanner module
+
+File: `src/scanner.py`
+
+Finds and indexes files from your filesystem.
+
+### Functions
+
+#### `get_file_type(extension: str) -> str`
+
+Determine file category from extension.
+
+**Parameters:**
+- `extension` (str): File extension, e.g., `.pdf`, `.jpg`
+
+**Returns:**
+- `str`: File type category. See reference table below.
+
+**File Type Mappings:**
+
+| Extension | Type |
+|-----------|------|
+| `.pdf`, `.docx`, `.txt`, `.md` | `document` |
+| `.jpg`, `.png`, `.gif`, `.svg` | `image` |
+| `.mp4`, `.avi`, `.mkv`, `.mov` | `video` |
+| `.mp3`, `.wav`, `.flac` | `audio` |
+| `.py`, `.js`, `.java`, `.go` | `code` |
+| `.xlsx`, `.csv` | `spreadsheet` |
+| `.zip`, `.rar`, `.7z` | `archive` |
+| Other | `other` |
+
+**Example:**
+```python
+from src.scanner import get_file_type
+
+print(get_file_type(".pdf"))     # Output: "document"
+print(get_file_type(".jpg"))     # Output: "image"
+print(get_file_type(".unknown")) # Output: "other"
+print(get_file_type(".PDF"))     # Output: "document" (case-insensitive)
+```
+
+---
+
+#### `should_skip(path: Path) -> bool`
+
+Check if path should be skipped during scanning.
+
+**Parameters:**
+- `path` (Path): File or directory path
+
+**Returns:**
+- `bool`: True if should skip, False otherwise
+
+**Skips:**
+- Folders: `.git`, `__pycache__`, `node_modules`, `.venv`, etc.
+- Files: `.DS_Store`, `Thumbs.db`, `*.tmp`, etc.
+
+**Example:**
+```python
+from src.scanner import should_skip
+from pathlib import Path
+
+skip_pycache = should_skip(Path("__pycache__"))  # True
+skip_normal = should_skip(Path("documents"))     # False
+```
+
+---
+
+#### `extract_metadata(path: Path) -> Optional[Dict]`
+
+Extract metadata from a file.
+
+**Parameters:**
+- `path` (Path): Path to file
+
+**Returns:**
+- `Dict` or `None`: Metadata dictionary with keys:
+  - `path`: Full file path
+  - `filename`: Just the filename
+  - `extension`: File extension
+  - `size`: File size in bytes
+  - `file_type`: Category (document, image, etc.)
+  - `modified_date`: Last modified (datetime)
+  - `created_date`: Created date (datetime)
+
+**Returns None if:**
+- File doesn't exist
+- Permission denied
+- File is unreadable
+
+**Example:**
+```python
+from src.scanner import extract_metadata
+from pathlib import Path
+
+path = Path("C:\\Users\\You\\Documents\\report.pdf")
+metadata = extract_metadata(path)
+
+if metadata:
+    print(f"File: {metadata['filename']}")
+    print(f"Type: {metadata['file_type']}")
+    print(f"Size: {metadata['size'] / (1024*1024):.2f} MB")
+else:
+    print("Could not read file")
+```
+
+---
+
+#### `scan_directory(start_path: str, max_depth: int = 10) -> Dict`
+
+Recursively scan directory and index all files.
+
+**Parameters:**
+- `start_path` (str): Directory to scan
+- `max_depth` (int): Maximum directory depth. Default: 10
+
+**Returns:**
+- `Dict`: Results with keys:
+  - `scanned` (int): Total files found
+  - `indexed` (int): Files successfully indexed
+  - `errors` (int): Files that failed to index
+
+**Behavior:**
+- Walks all subdirectories recursively
+- Skips hidden folders and temporary files
+- Skips files larger than 10 GB
+- Initializes database automatically
+- Prints progress every 100 files
+
+**Example:**
+```python
+from src.scanner import scan_directory
+
+results = scan_directory("C:\\Users\\You\\Documents")
+
+print(f"Scanned: {results['scanned']}")
+print(f"Indexed: {results['indexed']}")
+print(f"Errors: {results['errors']}")
+```
+
+---
+
+## search module
+
+File: `src/search.py`
+
+Query and filter indexed files.
+
+### Functions
+
+#### `search(query: str, limit: int = 100) -> List[Dict]`
+
+Search for files by filename.
+
+**Parameters:**
+- `query` (str): Search term (partial match on filename)
+- `limit` (int): Maximum results. Default: 100
+
+**Returns:**
+- `List[Dict]`: Matching file records
+
+**Example:**
+```python
+from src import search
+
+results = search.search("budget", limit=50)
+
+for file in results:
+    print(f"{file['filename']} - {file['path']}")
+```
+
+---
+
+#### `filter_by_type(file_type: str, limit: int = 100) -> List[Dict]`
+
+Get all files of a specific type.
+
+**Parameters:**
+- `file_type` (str): File category
+  - `document`, `image`, `code`, `video`, `audio`, `spreadsheet`, `archive`, `other`
+- `limit` (int): Maximum results. Default: 100
+
+**Returns:**
+- `List[Dict]`: Matching file records
+
+**Example:**
+```python
+from src import search
+
+images = search.filter_by_type("image", limit=200)
+documents = search.filter_by_type("document")
+code_files = search.filter_by_type("code")
+
+print(f"Found {len(images)} images")
+```
+
+---
+
+#### `filter_by_extension(extension: str, limit: int = 100) -> List[Dict]`
+
+Get all files with a specific extension.
+
+**Parameters:**
+- `extension` (str): File extension, e.g., `.pdf`, `.jpg`
+- `limit` (int): Maximum results. Default: 100
+
+**Returns:**
+- `List[Dict]`: Matching file records
+
+**Example:**
+```python
+from src import search
+
+pdfs = search.filter_by_extension(".pdf", limit=100)
+print(f"Found {len(pdfs)} PDF files")
+```
+
+---
+
+#### `filter_by_size(min_bytes: int = 0, max_bytes: int = 10*1024*1024, limit: int = 100) -> List[Dict]`
+
+Find files within a size range.
+
+**Parameters:**
+- `min_bytes` (int): Minimum file size in bytes
+- `max_bytes` (int): Maximum file size in bytes. Default: 10 MB
+- `limit` (int): Maximum results. Default: 100
+
+**Returns:**
+- `List[Dict]`: Matching file records
+
+**Size Reference:**
+```python
+1_KB = 1024
+1_MB = 1024 * 1024
+1_GB = 1024 * 1024 * 1024
+```
+
+**Example:**
+```python
+from src import search
+
+# Large files (100 MB - 1 GB)
+large = search.filter_by_size(
+    100 * 1024 * 1024,
+    1024 * 1024 * 1024
+)
+
+# Small files (under 1 MB)
+small = search.filter_by_size(0, 1024 * 1024)
+
+# Medium files (5 - 50 MB)
+medium = search.filter_by_size(
+    5 * 1024 * 1024,
+    50 * 1024 * 1024
+)
+```
+
+---
+
+#### `recent_files(days: int = 7, limit: int = 100) -> List[Dict]`
+
+Find files modified within N days.
+
+**Parameters:**
+- `days` (int): Number of days to look back. Default: 7
+- `limit` (int): Maximum results. Default: 100
+
+**Returns:**
+- `List[Dict]`: Recently modified file records
+
+**Example:**
+```python
+from src import search
+
+# Today's files
+today = search.recent_files(days=1)
+
+# This week
+week = search.recent_files(days=7)
+
+# This month
+month = search.recent_files(days=30)
+
+print(f"Files modified today: {len(today)}")
+```
+
+---
+
+#### `format_result(file_record: Dict) -> str`
+
+Format a file record for display.
+
+**Parameters:**
+- `file_record` (Dict): File record from database
+
+**Returns:**
+- `str`: Formatted string for display
+
+**Example:**
+```python
+from src import search
+
+results = search.search("report")
+if results:
+    file = results[0]
+    print(search.format_result(file))
+    # Output: "report.pdf        |     2.05 MB | document  | C:\path\to\report.pdf"
+```
+
+---
+
+#### `print_results(results: List[Dict], max_display: int = 20)`
+
+Pretty-print search results in table format.
+
+**Parameters:**
+- `results` (List[Dict]): List of file records
+- `max_display` (int): Maximum rows to display. Default: 20
+
+**Behavior:**
+- Prints as formatted table
+- Shows filename, size, type, path
+- Indicates if more results exist
+
+**Example:**
+```python
+from src import search
+
+results = search.filter_by_type("image", limit=50)
+search.print_results(results, max_display=10)
+
+# Output:
+# ==================================================
+# Filename      | Size (MB) | Type  | Path
+# ==================================================
+# photo1.jpg    |    2.50   | image | /path/to/photo1.jpg
+# photo2.png    |    5.30   | image | /path/to/photo2.png
+# ... and 48 more results
+# ==================================================
+```
+
+---
+
+## export module
+
+File: `src/export.py`
+
+Export indexed data to various formats.
+
+### Functions
+
+#### `export_json(results: List[Dict], output_path: Optional[str] = None, pretty: bool = True) -> str`
+
+Export search results as JSON.
+
+**Parameters:**
+- `results` (List[Dict]): List of file records
+- `output_path` (str, optional): File path to save JSON
+- `pretty` (bool): Pretty-print JSON. Default: True
+
+**Returns:**
+- `str`: JSON string
+
+**File Output** (if output_path provided):
+- Saves JSON to file
+- Includes export timestamp and result count
+
+**Example:**
+```python
+from src import search, export
+
+results = search.search("report")
+
+# Return JSON string
+json_str = export.export_json(results)
+print(json_str)
+
+# Save to file
+export.export_json(results, output_path="results.json")
+
+# Compact format
+json_compact = export.export_json(results, pretty=False)
+```
+
+**JSON Structure:**
+```json
+{
+  "exported_at": "2024-07-11T14:30:00.123456",
+  "total_results": 42,
+  "files": [
+    {
+      "id": 1,
+      "filename": "report.pdf",
+      "path": "/path/to/report.pdf",
+      "extension": ".pdf",
+      "file_type": "document",
+      "size": 2048576,
+      "modified_date": "2024-06-15T10:30:00",
+      ...
+    }
+  ]
+}
+```
+
+---
+
+#### `export_all_json(output_path: Optional[str] = None) -> str`
+
+Export entire database index as JSON.
+
+**Parameters:**
+- `output_path` (str, optional): File path to save JSON
+
+**Returns:**
+- `str`: JSON string with all files
+
+**Includes:**
+- Complete database statistics
+- All indexed files (up to 100,000)
+- Metadata for each file
+
+**Example:**
+```python
+from src import export
+
+# Save full index
+export.export_all_json("full_backup.json")
+
+# Get JSON string (no save)
+json_str = export.export_all_json()
+```
+
+---
+
+#### `export_csv(results: List[Dict], output_path: str) -> int`
+
+Export results as CSV (spreadsheet format).
+
+**Parameters:**
+- `results` (List[Dict]): List of file records
+- `output_path` (str): File path to save CSV
+
+**Returns:**
+- `int`: Number of rows written
+
+**CSV Columns:**
+- `filename`: Just the filename
+- `path`: Full file path
+- `extension`: File extension
+- `file_type`: Category
+- `size_bytes`: Raw byte count
+- `size_mb`: Size in megabytes (rounded)
+- `modified_date`: Last modified timestamp
+- `indexed_date`: When indexed by TigerMemory
+
+**Example:**
+```python
+from src import search, export
+
+# Export search results
+results = search.filter_by_type("image")
+count = export.export_csv(results, "images.csv")
+print(f"Exported {count} files to images.csv")
+
+# Open in Excel, Google Sheets, or Numbers
+```
+
+---
+
+## Complete Example Workflow
+
+```python
+from src import database, scanner, search, export
+from datetime import datetime
+
+# 1. Initialize database
+database.init()
+
+# 2. Scan a directory
+results = scanner.scan_directory("C:\\Users\\You\\Documents")
+print(f"Scanned {results['scanned']} files")
+
+# 3. View statistics
+stats = database.stats()
+print(f"Total indexed: {stats['total_files']}")
+
+# 4. Search for files
+documents = search.filter_by_type("document", limit=100)
+print(f"Found {len(documents)} documents")
+
+# 5. Advanced filtering
+large_pdfs = [
+    f for f in search.filter_by_extension(".pdf")
+    if f["size"] > 1024 * 1024  # > 1 MB
+]
+
+# 6. Export results
+export.export_csv(large_pdfs, "large_pdfs.csv")
+export.export_json(documents, output_path="documents.json")
+
+# 7. Pretty print
+search.print_results(documents)
+```
+
+---
+
+## Data Types Reference
+
+### File Record Dictionary
+
+Each file record returned by search functions is a dictionary:
+
+```python
+{
+    "id": 42,                              # int: Database ID
+    "path": "/home/user/report.pdf",       # str: Full file path
+    "filename": "report.pdf",              # str: Just filename
+    "extension": ".pdf",                   # str: File extension
+    "size": 2048576,                       # int: Size in bytes
+    "file_type": "document",               # str: Category
+    "modified_date": "2024-06-15...",      # str: ISO timestamp
+    "created_date": "2024-01-01...",       # str: ISO timestamp
+    "indexed_date": "2024-07-11...",       # str: ISO timestamp
+}
+```
+
+### Statistics Dictionary
+
+Returned by `database.stats()`:
+
+```python
+{
+    "total_files": 1234,                   # int: Total indexed
+    "total_size_bytes": 5368709120,        # int: Total size
+    "by_file_type": {                      # Dict[str, int]
+        "document": 450,
+        "image": 300,
+        "code": 200,
+        "other": 284
+    },
+    "database_path": "...",                # str: DB file path
+}
+```
+
+### Scan Results Dictionary
+
+Returned by `scanner.scan_directory()`:
+
+```python
+{
+    "scanned": 5000,                       # int: Files found
+    "indexed": 4998,                       # int: Successfully indexed
+    "errors": 2,                           # int: Failed to index
+}
+```
+
+---
+
+## Error Handling
+
+All functions handle errors gracefully:
+
+```python
+from src import scanner, database
+
+# Returns None if file doesn't exist
+metadata = scanner.extract_metadata(Path("/nonexistent/file.txt"))
+if metadata is None:
+    print("File not found or unreadable")
+
+# Returns -1 if database error
+file_id = database.add_file(...)
+if file_id == -1:
+    print("Database error")
+
+# Returns empty list if no results
+results = database.search("query")
+if not results:
+    print("No matches found")
+```
+
+---
+
+## Performance Tips
+
+1. **Batch Operations**: Insert many files at once
+2. **Limit Results**: Use reasonable limits to avoid large memory usage
+3. **Specific Queries**: Combine filters for faster narrowing
+4. **Caching**: Store results if querying repeatedly
+
+---
+
+## See Also
+
+- [SETUP_TUTORIAL.md](../SETUP_TUTORIAL.md) — Getting started
+- [ARCHITECTURE.md](../ARCHITECTURE.md) — System design
+- [QUICK_REFERENCE.md](QUICK_REFERENCE.md) — Command cheat sheet
+- [DEVELOPMENT.md](DEVELOPMENT.md) — Development guidelines
+
+SECOND FILE - 'ARCHITECTURE.md'
+=
+# TigerMemory Architecture
+
+## Project Overview
+TigerMemory is a local-first AI digital library and personal knowledge management system. It creates an intelligent layer on top of your existing files, enabling organization, understanding, searching, and AI-powered discovery without replacing your normal folder structure.
+
+## Core Principles
+- **Local-first**: All processing and data stays on your machine
+- **Privacy-focused**: No cloud uploads or external dependencies
+- **Beginner-friendly**: Simple to understand and extend
+- **Gradual development**: Build small working versions first
+- **Windows-compatible**: Works on local machines with offline tools
+
+## Version Roadmap
+
+### Version 0: Foundation (Current Target)
+**Goal**: Basic file scanning, metadata extraction, and local search
+
+**Features**:
+- Scan directories and find files
+- Extract metadata (filename, size, modified date, type)
+- Store metadata in SQLite database
+- Simple search by filename or metadata
+- JSON export of file index
+
+**Technology Stack**:
+- Python 3.9+
+- SQLite3 (local database)
+- JSON (metadata format)
+- pathlib (file operations)
+
+**Scope**: ~500-800 lines of Python code
+
+---
+
+### Version 1: Intelligence Layer
+**Goal**: Structure data with tags, categories, and relationships
+
+**Features**:
+- Tagging system (manual tags per file)
+- Category/folder classification
+- File type grouping
+- Basic relationship tracking (which files reference which)
+- Search by tags and categories
+
+---
+
+### Version 2: Local AI Integration
+**Goal**: Connect with Ollama for intelligent processing
+
+**Features**:
+- Send file metadata to local LLM (Ollama)
+- Auto-generate document summaries
+- Extract keywords and concepts
+- Smart search using embeddings
+- Semantic similarity between files
+
+---
+
+### Version 3: Full Personal AI Archive
+**Goal**: Advanced knowledge management and discovery
+
+**Features**:
+- Graph-based knowledge connections
+- Question-answering over your archive
+- Cross-project idea linking
+- AI-powered recommendations
+- Advanced filtering and exploration
+
+---
+
+## Database Schema (Version 0)
+
+### Files Table
+```
+id (primary key)
+path (text, unique)
+filename (text)
+extension (text)
+size (integer, bytes)
+modified_date (timestamp)
+created_date (timestamp)
+file_type (text: document, image, code, archive, etc.)
+indexed_date (timestamp)
+```
+
+### Metadata Table
+```
+id (primary key)
+file_id (foreign key)
+key (text)
+value (text)
+indexed_date (timestamp)
+```
+
+---
+
+## Project Structure
+
+```
+TigerMemory/
+├── src/
+│   ├── __init__.py
+│   ├── scanner.py          # File discovery and scanning
+│   ├── database.py         # SQLite operations
+│   ├── metadata.py         # Metadata extraction
+│   ├── search.py           # Search functionality
+│   └── export.py           # JSON export
+├── config/
+│   └── config.py           # Settings and paths
+├── data/
+│   └── tigermemory.db      # SQLite database (created on first run)
+├── tests/
+│   ├── test_scanner.py
+│   ├── test_database.py
+│   └── test_search.py
+├── docs/
+│   ├── ARCHITECTURE.md
+│   ├── API.md
+│   └── GETTING_STARTED.md
+├── main.py                 # Entry point / CLI
+├── requirements.txt
+└── README.md
+```
+
+---
+
+## Implementation Strategy
+
+### Phase 1: Core Scanner (Week 1)
+- Recursive directory scanning
+- File metadata collection
+- Type detection (by extension)
+
+### Phase 2: Database Layer (Week 1-2)
+- SQLite schema setup
+- Insert/query operations
+- Database initialization
+
+### Phase 3: Search Engine (Week 2)
+- Full-text search on metadata
+- Filter by file type, date, size
+- Sorting and limiting results
+
+### Phase 4: Export & CLI (Week 2-3)
+- JSON export of results
+- Command-line interface
+- Basic user workflows
+
+---
+
+## Key Design Decisions
+
+**Why SQLite?**
+- No external server required
+- Supports complex queries for later versions
+- Fast for local file indexing
+- Standard Python library (sqlite3)
+
+**Why JSON for metadata?**
+- Human-readable
+- Easy to extend without schema changes
+- Compatible with Ollama later
+- Simple to export/backup
+
+**Why Python?**
+- Your preference (TigerMemory Dev modelfile)
+- Excellent file handling (pathlib)
+- Strong database support
+- Great for beginner-friendly code
+
+---
+
+## Constraints & Considerations
+
+**Windows Laptop Performance**:
+- Optimize for slower disk I/O
+- Use batch database inserts
+- Avoid heavy memory operations during scanning
+
+**Privacy & Safety**:
+- Never upload file contents
+- Only store metadata locally
+- Respect .gitignore-like patterns
+- Option to exclude sensitive folders
+
+**Beginner-Friendly**:
+- Clear error messages
+- Simple CLI (no complex flags)
+- Good inline code comments
+- Step-by-step documentation
+
+---
+
+## Next Steps
+
+1. **Set up project structure** — Create folders and files
+2. **Install dependencies** — Python packages (requirements.txt)
+3. **Build scanner.py** — Recursive file discovery
+4. **Build database.py** — SQLite schema and CRUD operations
+5. **Build search.py** — Query and filter functionality
+6. **Write tests** — Verify each component works
+7. **Create main.py** — User-friendly CLI entry point
+
+---
+
+## Success Criteria for Version 0
+
+✅ Can scan a test directory (100+ files)  
+✅ Metadata correctly stored in database  
+✅ Search returns accurate results  
+✅ Export produces valid JSON  
+✅ Code is documented and beginner-friendly  
+✅ No external dependencies beyond Python stdlib + SQLite  
+
+THIRD FILE 'DEVELOPMENT.md'
+=
+"""
+Development Guidelines for TigerMemory
+
+## Code Style
+
+- Use docstrings on all functions ("""format""")
+- Use type hints for function arguments
+- Use meaningful variable names
+- Keep functions under 50 lines when possible
+- Add inline comments for complex logic
+
+Example:
+
+```python
+def search_files(
+    query: str,
+    file_type: Optional[str] = None,
+    limit: int = 100
+) -> List[Dict]:
+    '''
+    Search indexed files.
+    
+    Args:
+        query: Search term
+        file_type: Optional file type filter
+        limit: Max results
+    
+    Returns:
+        List of matching file records
+    '''
+```
+
+## Error Handling
+
+- Always catch specific exceptions (not bare except)
+- Print helpful error messages with [MODULE] prefix
+- Return sensible defaults (empty list, -1, None)
+- Never crash silently
+
+Example:
+
+```python
+try:
+    result = some_operation()
+except PermissionError as e:
+    print(f"[MODULE] Permission denied: {path}")
+    return None
+```
+
+## Testing
+
+- Write tests for new functions
+- Use pytest fixtures for setup
+- Test both success and error cases
+- Run: `pytest tests/ -v`
+
+## Logging
+
+Use this format for console output:
+
+```
+[MODULE] Message here
+```
+
+Examples:
+```
+[SCAN] Starting scan of: /path/to/dir
+[DB] Schema initialized: /path/to/db
+[SEARCH] Found 42 results for: 'query'
+[EXPORT] Saved to: output.json
+```
+
+## Performance
+
+- For large datasets (1000+ files):
+  - Use batch inserts (see config.py: BATCH_INSERT_SIZE)
+  - Progress messages every 100 files
+  - Don't load everything into memory at once
+
+- For Windows laptops:
+  - Test on slower storage (slower than SSD)
+  - Avoid excessive threading (keep simple)
+  - Monitor memory usage
+
+## Version Planning
+
+### Version 0 (Current)
+- Scanning, indexing, search
+- Focus: Working foundation
+
+### Version 1 (Planned)
+- Manual tagging system
+- Relationships between files
+- Advanced queries
+
+### Version 2 (Planned)
+- Ollama integration
+- Auto-generated summaries
+- Semantic search
+
+### Version 3 (Concept)
+- Full knowledge graph
+- Question-answering
+- Smart recommendations
+
+## Debugging Tips
+
+**Print what's happening**:
+```python
+print(f"[MODULE] Current state: {variable}")
+```
+
+**Check database contents**:
+```bash
+sqlite3 data/tigermemory.db
+sqlite> SELECT COUNT(*) FROM files;
+sqlite> SELECT filename FROM files LIMIT 5;
+```
+
+**Run tests with output**:
+```bash
+pytest tests/ -v -s
+```
+
+The `-s` flag shows print() statements.
+
+## Adding New Features
+
+1. Write tests first (test-driven development)
+2. Implement the feature
+3. Verify tests pass: `pytest tests/ -v`
+4. Add docstring and comments
+5. Test manually with real data
+6. Update ARCHITECTURE.md if major changes
+
+## File Structure Principles
+
+- Keep modules focused (scanner = scanning, database = DB ops)
+- Avoid circular imports (import at function level if needed)
+- Use config.py for all settings
+- Export clean APIs from each module
+
+FORTH FILE 'GETTING_STARTED.md'
+=
+"""
+Getting Started with TigerMemory
+
+This guide walks you through your first TigerMemory scan.
+
+## Prerequisites
+
+- Python 3.9 or later
+- A folder with files to index
+- Basic command-line knowledge
+
+## Step 1: Install Dependencies
+
+From the TigerMemory folder, run:
+
+```bash
+pip install -r requirements.txt
+```
+
+This installs pytest and other tools.
+
+## Step 2: Verify Installation
+
+Test that imports work:
+
+```bash
+python -c "from src import database; print('OK')"
+```
+
+You should see: `OK`
+
+## Step 3: Scan Your First Directory
+
+Choose a folder to index. Examples:
+
+- Windows: `C:\Users\YourName\Documents`
+- Mac/Linux: `/home/user/documents` or `~/documents`
+
+Run:
+
+```bash
+python main.py scan "path/to/your/folder"
+```
+
+**Example (Windows)**:
+```bash
+python main.py scan "C:\Users\YourName\Documents"
+```
+
+**Example (Mac/Linux)**:
+```bash
+python main.py scan ~/Documents
+```
+
+Watch the console output:
+
+```
+[SCAN] Starting scan of: C:\Users\YourName\Documents
+[SCAN] Database: ...\data\tigermemory.db
+[SCAN] Processed 100 files...
+[SCAN] Processed 200 files...
+...
+[SCAN] Scan complete!
+[SCAN] Files scanned: 450
+[SCAN] Files indexed: 448
+[SCAN] Errors: 2
+```
+
+## Step 4: Search Your Index
+
+After scanning, search for files:
+
+```bash
+python -c "from src import search; results = search.search('report'); search.print_results(results)"
+```
+
+Or search for a specific type:
+
+```bash
+python -c "from src import search; results = search.filter_by_type('image'); search.print_results(results)"
+```
+
+## Step 5: Check Database Statistics
+
+View what was indexed:
+
+```bash
+python -c "from src import database; stats = database.stats(); print(stats)"
+```
+
+Output example:
+
+```
+{
+  'total_files': 448,
+  'total_size_bytes': 12884901,
+  'by_file_type': {
+    'document': 125,
+    'image': 87,
+    'code': 203,
+    'other': 33
+  },
+  'database_path': '.../data/tigermemory.db'
+}
+```
+
+## Step 6: Export Your Index
+
+Save all indexed files as JSON:
+
+```bash
+python -c "from src import export; export.export_all_json('my_index.json')"
+```
+
+This creates `my_index.json` with complete metadata.
+
+## Step 7: Run Tests
+
+Verify everything works:
+
+```bash
+pytest tests/ -v
+```
+
+You should see:
+
+```
+test_database.py::test_database_init PASSED
+test_database.py::test_add_file PASSED
+test_database.py::test_search_files PASSED
+...
+```
+
+## Troubleshooting
+
+**"Module not found" errors**:
+- Make sure you're in the TigerMemory root folder
+- Run: `pip install -r requirements.txt`
+
+**"Database locked" error**:
+- Close any other TigerMemory instances
+- Delete `data/tigermemory.db` and rescan
+
+**"Permission denied" when scanning**:
+- Windows: Run cmd as Administrator
+- Mac/Linux: Use `sudo` (carefully)
+
+**Slow scanning**:
+- Large folders (10,000+ files) take time
+- Be patient, it will finish
+- Try a smaller test folder first
+
+## What's Next?
+
+Now that Version 0 works:
+
+1. **Explore the code** — Read comments in `src/` files
+2. **Add features** — Try modifying search.py to add new search types
+3. **Plan Version 1** — Think about tagging and relationships (see ARCHITECTURE.md)
+4. **Connect Ollama** — Prepare for local AI integration (Version 2)
+
+## Common Tasks
+
+**Index your entire Documents folder**:
+```bash
+python main.py scan "~/Documents"
+```
+
+**Search for all PDFs**:
+```bash
+python -c "from src import search; search.print_results(search.filter_by_extension('.pdf'))"
+```
+
+**Find large files (over 100 MB)**:
+```bash
+python -c "from src import search; results = search.filter_by_size(100*1024*1024, 10*1024*1024*1024); search.print_results(results)"
+```
+
+**Export recent files as CSV**:
+```bash
+python -c "from src import search, export; r = search.recent_files(days=30); export.export_csv(r, 'recent.csv')"
+```
+
+---
+
+**Questions?** Review code comments and ARCHITECTURE.md for deeper understanding.
+
+FIFTH FILE 'HUI_CLI_USER_GUIDE.md'
+=
+# TigerMemory GUI & CLI Complete User Guide
+
+**Version:** 0.0.1  
+**Last Updated:** July 11, 2026
+
+---
+
+## Table of Contents
+
+1. [Launching TigerMemory](#launching-tigermemory)
+2. [GUI Interface](#gui-interface)
+3. [CLI Commands](#cli-commands)
+4. [Common Workflows](#common-workflows)
+5. [Troubleshooting](#troubleshooting)
+
+---
+
+## Launching TigerMemory
+
+### Option 1: Graphical User Interface (GUI)
+
+**Recommended for beginners**
+
+```bash
+python gui.py
+```
+
+Or via CLI:
+
+```bash
+python main.py gui
+```
+
+The GUI opens with these tabs:
+- **Scan** - Index directories
+- **Search** - Find files with advanced filters
+- **Browse** - View all indexed files
+- **Export** - Save data as JSON/CSV
+- **Statistics** - View index information
+- **Settings** - Manage database and view file types
+
+### Option 2: Command-Line Interface (CLI)
+
+**Recommended for automation and advanced users**
+
+```bash
+python main.py [command] [options]
+```
+
+---
+
+## GUI Interface
+
+### Scan Tab
+
+**Purpose:** Index files from your computer
+
+**Steps:**
+1. Click "Browse..." to select a directory
+2. Adjust "Max Depth" if needed (default: 10)
+3. Click "Start Scan"
+4. Watch progress in the "Progress" section
+5. View results when complete
+
+**What it does:**
+- Recursively scans all subdirectories
+- Extracts file metadata (name, size, type, date)
+- Stores in local SQLite database
+- Shows real-time progress
+
+**Example:**
+- Scan: `C:\Users\You\Documents`
+- Max Depth: 10
+- Result: 500 files indexed in 2 minutes
+
+---
+
+### Search Tab
+
+**Purpose:** Find files using multiple filters
+
+**Search Options:**
+
+| Option | Function | Example |
+|--------|----------|---------|
+| **Filename** | Partial match in filename | "report" finds report.pdf, reports.docx |
+| **File Type** | Category filter | "image", "document", "code", etc. |
+| **Size (MB)** | Range filter | Min: 1, Max: 100 |
+| **Modified (days)** | Recent files | 7 = last week |
+
+**Examples:**
+
+**Find all PDFs:**
+- Filename: (empty)
+- File Type: "document"
+- Extension: ".pdf"
+- Click Search
+
+**Find large images from last month:**
+- Filename: (empty)
+- File Type: "image"
+- Size: Min 5 MB, Max 500 MB
+- Modified: 30 days
+- Click Search
+
+**Find files named "budget":**
+- Filename: "budget"
+- All other fields: defaults
+- Click Search
+
+**Results Display:**
+- Table shows up to 500 results
+- Columns: Filename, Type, Size, Modified Date, Full Path
+- Status bar shows total matches
+
+---
+
+### Browse Tab
+
+**Purpose:** View all indexed files
+
+**Features:**
+- Filter by file type dropdown
+- Refresh button to reload
+- Click "Refresh" to update after scanning
+
+**Filter Options:**
+- All (default)
+- document, image, code, video, audio, spreadsheet, archive, other
+
+**Use Cases:**
+- Get overview of what's indexed
+- Find all photos
+- See all code files
+- Check total file count
+
+---
+
+### Export Tab
+
+**Purpose:** Save indexed data for backup or analysis
+
+**Export Options:**
+
+| Setting | Options | Purpose |
+|---------|---------|---------|
+| **Export Type** | All / Search Results | All = entire index, Results = last search |
+| **File Format** | JSON / CSV | JSON = detailed, CSV = spreadsheet-compatible |
+| **Save Destination** | File path | Where to save exported file |
+
+**JSON Export:**
+- Contains full metadata
+- Machine-readable format
+- Good for backup
+- Can be imported to other tools
+
+**CSV Export:**
+- Opens in Excel/Google Sheets
+- Human-readable spreadsheet
+- Good for analysis
+- Columns: Filename, Path, Extension, Type, Size, Date
+
+**Workflow:**
+1. Perform a search (or leave empty for all)
+2. Select export format
+3. Click "Browse..." to choose destination
+4. Click "Export"
+5. Confirmation message appears
+
+---
+
+### Statistics Tab
+
+**Purpose:** View database information
+
+**Displays:**
+- Total files indexed
+- Total size (MB and GB)
+- Files by type breakdown
+- Database path
+- Last update time
+
+**Click "Refresh Statistics" to update**
+
+---
+
+### Settings Tab
+
+**Purpose:** Database management and file type reference
+
+**Database Management:**
+- **Backup Database** - Creates timestamped backup
+- **Clear Database** - Deletes all indexed files (with confirmation)
+
+**File Type Reference:**
+- Lists all 40+ supported file extensions
+- Grouped by category (document, image, code, etc.)
+- Scroll to see all types
+
+---
+
+## CLI Commands
+
+### Scan Command
+
+**Scan a directory and index files**
+
+```bash
+python main.py scan /path/to/directory
+```
+
+**Options:**
+```bash
+--depth N        Maximum directory depth (default: 10)
+--verbose, -v    Show detailed output including stats
+```
+
+**Examples:**
+
+```bash
+# Basic scan
+python main.py scan /home/user/documents
+
+# Deep scan with verbose output
+python main.py scan /home/user/documents --depth 15 --verbose
+
+# Windows path
+python main.py scan "C:\Users\You\Documents"
+```
+
+**Output:**
+```
+Scanning: /path
+Files scanned:   500
+Files indexed:   498
+Errors:          2
+```
+
+---
+
+### Search Command
+
+**Search indexed files**
+
+```bash
+python main.py search "query"
+```
+
+**Options:**
+```bash
+--type, -t          Filter by file type (image, document, code, etc.)
+--extension, -e     Filter by extension (.pdf, .jpg, etc.)
+--min-size NUM      Minimum file size in MB
+--max-size NUM      Maximum file size in MB
+--days NUM          Files modified in last N days
+--limit NUM         Maximum results to show (default: 50)
+--json              Output as JSON
+```
+
+**Examples:**
+
+```bash
+# Search by name
+python main.py search "budget"
+
+# Find all images
+python main.py search "" --type image --limit 100
+
+# Find large PDFs
+python main.py search "" --extension .pdf --min-size 5 --max-size 100
+
+# Recent documents
+python main.py search "" --type document --days 7
+
+# Export search results as JSON
+python main.py search "2024" --json > results.json
+
+# Find files modified today
+python main.py search "" --days 1 --limit 200
+```
+
+**Output (Table):**
+```
+Found 5 files
+----
+Filename      Type      Size (MB)  Modified
+report.pdf    document  2.50       2024-07-11
+budget.xlsx   spreadsheet 1.20     2024-07-10
+```
+
+**Output (JSON):**
+```json
+[
+  {
+    "id": 42,
+    "filename": "report.pdf",
+    "path": "/path/to/report.pdf",
+    "file_type": "document",
+    "size": 2621440,
+    "modified_date": "2024-07-11T10:00:00"
+  }
+]
+```
+
+---
+
+### Export Command
+
+**Export indexed data**
+
+```bash
+python main.py export --output backup.json
+```
+
+**Options:**
+```bash
+--output, -o FILE  Output file path (required)
+--format, -f FMT   Format: json or csv (default: json)
+--query, -q TEXT   Only export files matching query
+```
+
+**Examples:**
+
+```bash
+# Export everything as JSON
+python main.py export --output backup.json
+
+# Export everything as CSV
+python main.py export --output index.csv --format csv
+
+# Export only images as JSON
+python main.py export --output images.json --query "image" --format json
+
+# Export search results
+python main.py export --output documents_2024.csv --query "2024" --format csv
+```
+
+---
+
+### Stats Command
+
+**Show database statistics**
+
+```bash
+python main.py stats
+```
+
+**Options:**
+```bash
+--json    Output as JSON
+```
+
+**Output:**
+```
+TIGERMEMORY DATABASE STATISTICS
+Total Files:     1234
+Total Size:      5432.50 MB (5.30 GB)
+
+By File Type:
+  document                       450 files
+  image                          300 files
+  code                           200 files
+  ...
+```
+
+---
+
+### Database Command
+
+**Manage database**
+
+```bash
+python main.py db [--info | --backup | --clear]
+```
+
+**Options:**
+```bash
+--info    Show database information
+--backup  Create timestamped backup
+--clear   Delete all indexed files
+```
+
+**Examples:**
+
+```bash
+# Show database info
+python main.py db --info
+
+# Create backup
+python main.py db --backup
+# Creates: data/tigermemory_backup_20240711_143000.db
+
+# Clear database (requires confirmation)
+python main.py db --clear
+# Prompts: "Clear all indexed files? (yes/no): "
+```
+
+---
+
+### GUI Command
+
+**Launch graphical interface**
+
+```bash
+python main.py gui
+```
+
+Opens the full GUI with all tabs and features.
+
+---
+
+## Common Workflows
+
+### Workflow 1: Initial Setup
+
+1. **Scan your main folder:**
+   ```bash
+   python main.py scan ~/Documents
+   ```
+
+2. **Check what was indexed:**
+   ```bash
+   python main.py stats
+   ```
+
+3. **Backup the database:**
+   ```bash
+   python main.py db --backup
+   ```
+
+### Workflow 2: Regular Usage (GUI)
+
+1. Open: `python gui.py`
+2. Click "Scan" tab
+3. Select folder and scan
+4. Go to "Search" tab
+5. Find your files
+6. Export if needed
+
+### Workflow 3: Find Specific Files
+
+```bash
+# Find all PDFs
+python main.py search "" --type document --extension .pdf
+
+# Find large video files
+python main.py search "" --type video --min-size 100
+
+# Find recently modified files
+python main.py search "" --days 1
+```
+
+### Workflow 4: Backup & Share
+
+```bash
+# Export everything
+python main.py export --output full_index.json
+
+# Share specific results
+python main.py search "2024" --format csv --output 2024_files.csv
+```
+
+### Workflow 5: Automated Scan (Batch Script)
+
+**Create `scan_daily.bat` (Windows):**
+```batch
+@echo off
+cd C:\path\to\TigerMemory
+python main.py scan "C:\Users\You\Documents"
+python main.py export --output backup_%date:~10,4%%date:~4,2%%date:~7,2%.json
+```
+
+**Create `scan_daily.sh` (Mac/Linux):**
+```bash
+#!/bin/bash
+cd ~/TigerMemory
+python3 main.py scan ~/Documents
+python3 main.py export --output backup_$(date +%Y%m%d).json
+```
+
+---
+
+## Troubleshooting
+
+### GUI Won't Open
+
+**Problem:** "ModuleNotFoundError" when running `python gui.py`
+
+**Solutions:**
+- Verify tkinter is installed (usually included with Python)
+- On Linux, may need: `sudo apt-get install python3-tk`
+- Try via CLI: `python main.py gui`
+
+### Search Returns No Results
+
+**Problem:** No files found in search
+
+**Causes & Solutions:**
+- Did you scan yet? Run: `python main.py stats` to check
+- If "Total Files: 0", scan first
+- Try searching with empty query: `python main.py search ""`
+- Check file type spelling (lowercase)
+
+### Slow Searching
+
+**Problem:** Search takes a long time
+
+**Causes & Solutions:**
+- Try limiting results: `--limit 100`
+- Use more specific filters
+- For large databases (10,000+ files), this is normal
+- Export to CSV if you need repeated access
+
+### Database Locked
+
+**Problem:** "Database is locked" error
+
+**Solution:**
+- Close other TigerMemory instances
+- Restart terminal/GUI
+- If persistent, backup and clear:
+  ```bash
+  python main.py db --backup
+  python main.py db --clear
+  ```
+
+### Permission Denied When Scanning
+
+**Problem:** Cannot access certain folders
+
+**Solutions:**
+- Windows: Run Command Prompt as Administrator
+- Mac/Linux: Use `sudo` carefully or scan accessible folders
+- Try a subfolder first
+
+### GUI Buttons Unresponsive
+
+**Problem:** GUI appears frozen
+
+**Solution:**
+- Wait - large scans can take time
+- Check terminal for progress messages
+- If truly stuck, close and reopen
+
+### Out of Memory
+
+**Problem:** "MemoryError" during large scans
+
+**Solution:**
+- Scan smaller folders at a time
+- Use lower max-depth: `--depth 5`
+- Try CLI instead of GUI
+
+---
+
+## Performance Tips
+
+### Speed Up Scans
+
+- Scan to internal SSD (faster than USB)
+- Use appropriate max-depth (default 10 is fine for most)
+- Close other applications
+- Scan during off-peak hours for large folders
+
+### Optimize Searches
+
+- Add filters (type, size, date)
+- Limit results: `--limit 50`
+- Be specific with queries
+
+### Database Maintenance
+
+- Regular backups: `python main.py db --backup`
+- Monitor size: `python main.py stats`
+- Clear if needed and rescan
+
+---
+
+## File Type Reference
+
+**Supported file types (40+ extensions):**
+
+```
+DOCUMENTS
+- .pdf, .docx, .doc, .txt, .md, .rtf
+
+IMAGES
+- .jpg, .jpeg, .png, .gif, .svg, .webp
+
+CODE
+- .py, .js, .java, .cpp, .go, .rust, .sql
+
+VIDEO
+- .mp4, .avi, .mkv, .mov, .flv
+
+AUDIO
+- .mp3, .wav, .flac, .m4a
+
+SPREADSHEET
+- .xlsx, .xls, .csv
+
+ARCHIVE
+- .zip, .rar, .7z, .tar, .gz
+```
+
+---
+
+## Advanced Usage
+
+### Scripting with CLI
+
+```bash
+#!/bin/bash
+# Scan multiple folders
+for folder in ~/Documents ~/Pictures ~/Downloads; do
+  echo "Scanning $folder..."
+  python main.py scan "$folder"
+done
+
+# Export daily
+DATE=$(date +%Y%m%d)
+python main.py export --output backup_$DATE.json
+```
+
+### Monitoring Changes
+
+```bash
+# Before
+python main.py stats > stats_before.txt
+
+# Scan new folder
+python main.py scan ~/NewFolder
+
+# After
+python main.py stats > stats_after.txt
+
+# Compare
+diff stats_before.txt stats_after.txt
+```
+
+### Analysis
+
+```bash
+# Find all code files
+python main.py search "" --type code --json > code_files.json
+
+# Import into your analysis tool
+# (e.g., Python, R, etc.)
+```
+
+---
+
+## Summary
+
+| Method | Best For | Command |
+|--------|----------|---------|
+| **GUI** | Beginners, interactive use | `python gui.py` |
+| **CLI** | Automation, scripting | `python main.py [cmd]` |
+| **Scan** | Index files | `python main.py scan /path` |
+| **Search** | Finding files | `python main.py search "query"` |
+| **Export** | Backup/sharing | `python main.py export --output file` |
+| **Stats** | Overview | `python main.py stats` |
+
+---
+
+**Questions?** Check the main documentation: SETUP_TUTORIAL.md, ARCHITECTURE.md, docs/API_REFERENCE.md
+
+**Ready to explore?** Start with: `python gui.py`
+
+SIXTH FILE 'SETUP_TUTORIAL.md'
+=
+# TigerMemory Complete Setup & Tutorial Guide
+
+**Last Updated**: July 11, 2026  
+**Version**: 0.0.1  
+**Difficulty**: Beginner-friendly
+
+---
+
+## Table of Contents
+
+1. [What is TigerMemory?](#what-is-tigermemory)
+2. [System Requirements](#system-requirements)
+3. [Installation Steps](#installation-steps)
+4. [First Run](#first-run)
+5. [How to Use](#how-to-use)
+6. [Common Tasks](#common-tasks)
+7. [Troubleshooting](#troubleshooting)
+8. [Understanding the Code](#understanding-the-code)
+9. [Next Steps](#next-steps)
+
+---
+
+## What is TigerMemory?
+
+TigerMemory is a **personal knowledge management system** that runs entirely on your computer. Think of it as a smart filing system for all your digital files.
+
+### What It Does:
+
+- **Scans** your folders and finds all your files
+- **Indexes** them in a local database (SQLite)
+- **Extracts metadata** like filename, size, type, and modification date
+- **Searches** fast without relying on your operating system's search
+- **Exports** your index as JSON for backup or analysis
+- **Prepares for AI** — future versions will use Ollama to understand your files
+
+### What It Doesn't Do:
+
+- Upload your files anywhere
+- Require internet connection
+- Need complex setup
+- Replace your existing folders (works alongside them)
+
+### Why Build This?
+
+Most people have files scattered everywhere:
+- Important documents buried in deep folders
+- Hard to find files by meaning (only by name)
+- No way to see connections between projects
+- Concerns about privacy with cloud storage
+
+TigerMemory solves this by giving YOU control of an intelligent index.
+
+---
+
+## System Requirements
+
+### Minimum Specs:
+
+| Requirement | Details |
+|-------------|---------|
+| **Operating System** | Windows 10+, macOS 10.14+, Linux (any modern distro) |
+| **Python** | 3.9 or later |
+| **Disk Space** | 100 MB for TigerMemory + space for your file index |
+| **RAM** | 512 MB minimum (more is better for large scans) |
+| **CPU** | Any modern processor |
+
+### Recommended:
+
+| Component | Recommendation |
+|-----------|-----------------|
+| **Python Version** | 3.11 or 3.12 (latest stable) |
+| **Disk Storage** | SSD (faster scanning) |
+| **RAM** | 2+ GB (smooth performance) |
+| **Folder Size** | Start with <50,000 files for first test |
+
+### Check Your Python Version:
+
+Open a terminal/command prompt and run:
+
+```bash
+python --version
+```
+
+You should see: `Python 3.9.x` or higher.
+
+**Windows users**: If `python` doesn't work, try `python3` or `py`.
+
+---
+
+## Installation Steps
+
+### Step 1: Create a Project Folder
+
+Choose where to put TigerMemory. Examples:
+
+**Windows:**
+```bash
+mkdir C:\Users\YourName\Projects\TigerMemory
+cd C:\Users\YourName\Projects\TigerMemory
+```
+
+**macOS/Linux:**
+```bash
+mkdir ~/Projects/TigerMemory
+cd ~/Projects/TigerMemory
+```
+
+### Step 2: Create Project Structure
+
+You should already have these files from the initial setup. If not, create them:
+
+```
+TigerMemory/
+├── src/
+│   ├── __init__.py
+│   ├── scanner.py
+│   ├── database.py
+│   ├── search.py
+│   └── export.py
+├── config/
+│   └── config.py
+├── data/
+├── tests/
+├── docs/
+├── main.py
+├── requirements.txt
+├── README.md
+└── .gitignore
+```
+
+**Verify files exist:**
+
+Windows:
+```bash
+dir /s
+```
+
+macOS/Linux:
+```bash
+ls -la
+```
+
+You should see all folders and `.py` files listed.
+
+### Step 3: Install Python Dependencies
+
+TigerMemory needs a few Python packages. Install them using `pip`:
+
+```bash
+pip install -r requirements.txt
+```
+
+What this does:
+- `pytest` — Testing framework for running tests
+- Other utilities for file handling and exports
+
+**Expected output:**
+```
+Collecting pytest>=7.0.0
+Downloading pytest-...
+Installing collected packages: ...
+Successfully installed pytest-7.x.x
+```
+
+**Troubleshooting `pip` command:**
+
+If `pip` doesn't work, try:
+```bash
+python -m pip install -r requirements.txt
+```
+
+Or on some systems:
+```bash
+pip3 install -r requirements.txt
+```
+
+### Step 4: Verify Installation
+
+Test that everything installed correctly:
+
+```bash
+python -c "import sqlite3; import json; print('✓ Core modules OK')"
+```
+
+Test TigerMemory imports:
+
+```bash
+python -c "from src import database, scanner, search; print('✓ TigerMemory modules OK')"
+```
+
+You should see both checkmarks.
+
+### Step 5: Create Data Directory
+
+The `data/` folder stores your database:
+
+**Windows:**
+```bash
+mkdir data
+```
+
+**macOS/Linux:**
+```bash
+mkdir -p data
+```
+
+---
+
+## First Run
+
+### Run 1: Initialize Database
+
+Before scanning, create an empty database:
+
+```bash
+python -c "from src import database; database.init(); print('Database initialized!')"
+```
+
+**Expected output:**
+```
+[CONFIG] Project root: C:\...\TigerMemory
+[CONFIG] Database: C:\...\TigerMemory\data\tigermemory.db
+[DB] Schema initialized: C:\...\TigerMemory\data\tigermemory.db
+Database initialized!
+```
+
+Check that the database file was created:
+
+**Windows:**
+```bash
+dir data\
+```
+
+**macOS/Linux:**
+```bash
+ls -lh data/
+```
+
+You should see `tigermemory.db` (usually small, like 12 KB).
+
+### Run 2: Scan a Test Folder
+
+Pick a **small folder** to test with (10-100 files):
+
+**Option A: Test with a system folder**
+
+Windows (fast test):
+```bash
+python main.py scan "C:\Windows\System32\drivers\etc"
+```
+
+macOS (fast test):
+```bash
+python main.py scan /etc/ssh
+```
+
+Linux (fast test):
+```bash
+python main.py scan /etc/ssh
+```
+
+**Option B: Create your own test folder**
+
+Windows:
+```bash
+mkdir C:\test_files
+cd C:\test_files
+copy C:\Windows\System32\notepad.exe test1.exe
+copy C:\Windows\System32\calc.exe test2.exe
+cd ..
+python main.py scan "C:\test_files"
+```
+
+macOS/Linux:
+```bash
+mkdir ~/test_files
+cp /usr/bin/python3 ~/test_files/test1
+cp /usr/bin/ls ~/test_files/test2
+python main.py scan ~/test_files
+```
+
+**Expected output:**
+```
+[SCAN] Starting scan of: C:\...\test_files
+[SCAN] Database: C:\...\TigerMemory\data\tigermemory.db
+[SCAN] Processed 5 files...
+[SCAN] Scan complete!
+[SCAN] Files scanned: 10
+[SCAN] Files indexed: 10
+[SCAN] Errors: 0
+```
+
+### Run 3: View Database Statistics
+
+After scanning, check what was indexed:
+
+```bash
+python -c "from src import database; import json; print(json.dumps(database.stats(), indent=2))"
+```
+
+**Expected output:**
+```json
+{
+  "total_files": 10,
+  "total_size_bytes": 2048576,
+  "by_file_type": {
+    "other": 10
+  },
+  "database_path": "C:\\..\\TigerMemory\\data\\tigermemory.db"
+}
+```
+
+### Run 4: Search Your Index
+
+Now search for a file you know exists:
+
+```bash
+python -c "from src import search; results = search.search('test'); search.print_results(results)"
+```
+
+**Expected output:**
+```
+================================================
+Filename                                 |   Size (MB) | Type      | Path
+================================================
+test1.exe                                |       0.50 | other     | C:\test_files\test1.exe
+test2.exe                                |       0.48 | other     | C:\test_files\test2.exe
+================================================
+```
+
+### Run 5: Export Your Index
+
+Save the indexed data as JSON:
+
+```bash
+python -c "from src import export; export.export_all_json('my_first_index.json')"
+```
+
+Check the file:
+
+**Windows:**
+```bash
+type my_first_index.json | more
+```
+
+**macOS/Linux:**
+```bash
+cat my_first_index.json | head -50
+```
+
+You'll see a JSON structure with all your files and metadata.
+
+---
+
+## How to Use
+
+### Basic Workflow
+
+#### 1. Scan a Folder
+
+```bash
+python main.py scan "path/to/folder"
+```
+
+**Example (Windows):**
+```bash
+python main.py scan "C:\Users\YourName\Documents"
+```
+
+**Example (macOS):**
+```bash
+python main.py scan ~/Documents
+```
+
+**Example (Linux):**
+```bash
+python main.py scan /home/username/documents
+```
+
+What happens:
+- TigerMemory walks through every subfolder
+- Extracts metadata from each file
+- Stores in `data/tigermemory.db`
+- Skips hidden folders, temporary files, etc.
+
+#### 2. Search by Filename
+
+```bash
+python -c "from src import search; results = search.search('budget'); search.print_results(results)"
+```
+
+This finds all files with "budget" in their name.
+
+#### 3. Filter by File Type
+
+```bash
+python -c "from src import search; results = search.filter_by_type('image'); search.print_results(results)"
+```
+
+Available types:
+- `document` — PDF, Word, text files
+- `image` — JPG, PNG, GIF, etc.
+- `code` — Python, JavaScript, Java, etc.
+- `video` — MP4, AVI, MKV, etc.
+- `audio` — MP3, WAV, FLAC, etc.
+- `spreadsheet` — Excel, CSV, etc.
+- `archive` — ZIP, RAR, 7Z, etc.
+- `other` — Unknown types
+
+#### 4. Filter by Extension
+
+```bash
+python -c "from src import search; results = search.filter_by_extension('.pdf'); search.print_results(results)"
+```
+
+#### 5. Find Recent Files
+
+```bash
+python -c "from src import search; results = search.recent_files(days=7); search.print_results(results)"
+```
+
+This shows files modified in the last 7 days.
+
+#### 6. Filter by Size
+
+Find files between 10 MB and 100 MB:
+
+```bash
+python -c "from src import search; results = search.filter_by_size(10*1024*1024, 100*1024*1024); search.print_results(results)"
+```
+
+#### 7. Export Results
+
+Export search results as JSON:
+
+```bash
+python -c "from src import search, export; results = search.search('report'); export.export_json(results, 'report_search.json')"
+```
+
+Export as CSV:
+
+```bash
+python -c "from src import search, export; results = search.search('2024'); export.export_csv(results, 'files_2024.csv')"
+```
+
+### Interactive Python
+
+For more complex queries, use Python interactively:
+
+```bash
+python
+```
+
+Then in the Python shell:
+
+```python
+from src import search, database
+
+# Get stats
+stats = database.stats()
+print(f"Total files indexed: {stats['total_files']}")
+
+# Search
+results = search.search('important')
+for file in results:
+    print(f"{file['filename']} - {file['size']} bytes")
+
+# Filter by multiple criteria
+large_pdfs = search.filter_by_extension('.pdf', limit=50)
+recent = search.recent_files(days=30)
+
+# Exit
+exit()
+```
+
+---
+
+## Common Tasks
+
+### Task 1: Index Your Entire Documents Folder
+
+```bash
+python main.py scan "C:\Users\YourName\Documents"
+```
+
+**Time estimate**: 1-5 minutes for 1,000 files
+
+**Monitor progress**: You'll see `[SCAN] Processed N files...` every 100 files.
+
+### Task 2: Find All PDFs
+
+```bash
+python -c "from src import search; results = search.filter_by_extension('.pdf'); search.print_results(results)"
+```
+
+### Task 3: Find All Images
+
+```bash
+python -c "from src import search; results = search.filter_by_type('image'); search.print_results(results)"
+```
+
+### Task 4: Find Large Files (Over 100 MB)
+
+```bash
+python -c "from src import search; results = search.filter_by_size(100*1024*1024, 10*1024*1024*1024); search.print_results(results)"
+```
+
+### Task 5: Find Files Modified Today
+
+```bash
+python -c "from src import search; results = search.recent_files(days=1); search.print_results(results)"
+```
+
+### Task 6: Export Everything to JSON
+
+```bash
+python -c "from src import export; export.export_all_json('full_index_backup.json')"
+```
+
+### Task 7: Export Everything to CSV
+
+```bash
+python -c "from src import search, export; all_files = search.search('', limit=100000); export.export_csv(all_files, 'all_files.csv')"
+```
+
+### Task 8: Clear and Rescan
+
+Delete the database and scan fresh:
+
+**Windows:**
+```bash
+del data\tigermemory.db
+python main.py scan "C:\path\to\folder"
+```
+
+**macOS/Linux:**
+```bash
+rm data/tigermemory.db
+python main.py scan ~/folder
+```
+
+---
+
+## Troubleshooting
+
+### Problem 1: "python: command not found"
+
+**Cause**: Python not installed or not in PATH
+
+**Solutions**:
+
+1. Check if installed:
+   ```bash
+   python3 --version
+   ```
+   If that works, use `python3` instead of `python`.
+
+2. Download Python from https://www.python.org/downloads/
+   - Windows: Run the installer, **check "Add Python to PATH"**
+   - macOS: Use Homebrew: `brew install python3`
+   - Linux: `sudo apt install python3` (Ubuntu/Debian)
+
+3. Restart terminal after installing.
+
+### Problem 2: "ModuleNotFoundError: No module named 'src'"
+
+**Cause**: Not in the TigerMemory root folder
+
+**Solution**:
+
+Make sure you're in the folder with `main.py`:
+
+```bash
+cd C:\path\to\TigerMemory
+dir
+```
+
+You should see `main.py`, `README.md`, and a `src/` folder.
+
+### Problem 3: "Permission denied" when scanning
+
+**Cause**: Folder is protected or in use
+
+**Solutions**:
+
+1. **Windows**: Run Command Prompt as Administrator
+   - Right-click Command Prompt → "Run as administrator"
+
+2. **macOS/Linux**: Try with `sudo` (carefully):
+   ```bash
+   sudo python main.py scan /protected/folder
+   ```
+
+3. Try a different folder first to verify it works
+
+### Problem 4: "Database is locked"
+
+**Cause**: Another TigerMemory process is running
+
+**Solution**:
+
+1. Close any open Python terminals
+2. Delete the database:
+   ```bash
+   rm data/tigermemory.db  # macOS/Linux
+   del data\tigermemory.db  # Windows
+   ```
+3. Try again:
+   ```bash
+   python main.py scan "your_folder"
+   ```
+
+### Problem 5: Scanning is Very Slow
+
+**Cause**: Large folder (10,000+ files) or slow storage
+
+**Solutions**:
+
+1. **Be patient** — Scanning 10,000 files takes 2-5 minutes normally
+2. **Check progress**: Watch for `[SCAN] Processed N files...` messages
+3. **Use faster storage**: If on external USB drive, try internal storage
+4. **Start smaller**: Test with a 100-file folder first
+
+### Problem 6: "No module named pytest"
+
+**Cause**: Dependencies not installed
+
+**Solution**:
+
+```bash
+pip install -r requirements.txt
+```
+
+Or manually:
+
+```bash
+pip install pytest
+```
+
+### Problem 7: Search Returns No Results
+
+**Cause**: Folder not scanned yet
+
+**Solution**:
+
+1. Verify database exists:
+   ```bash
+   ls data/tigermemory.db  # macOS/Linux
+   dir data\tigermemory.db  # Windows
+   ```
+
+2. Check database stats:
+   ```bash
+   python -c "from src import database; print(database.stats())"
+   ```
+
+3. If `total_files: 0`, scan a folder:
+   ```bash
+   python main.py scan "your_folder"
+   ```
+
+### Problem 8: "No such file or directory" on Scan
+
+**Cause**: Incorrect path format
+
+**Solution**:
+
+Use quotes around paths with spaces:
+
+**Wrong:**
+```bash
+python main.py scan C:\Users\My Documents
+```
+
+**Right:**
+```bash
+python main.py scan "C:\Users\My Documents"
+```
+
+---
+
+## Understanding the Code
+
+### Project Structure Explained
+
+```
+TigerMemory/
+├── src/                    # Main source code
+│   ├── scanner.py          # Finds and reads files
+│   ├── database.py         # Stores/retrieves data
+│   ├── search.py           # Searches the index
+│   └── export.py           # Exports to JSON/CSV
+├── config/                 # Settings
+│   └── config.py           # Paths, file types, constants
+├── data/                   # Your database lives here
+│   └── tigermemory.db      # SQLite database
+├── tests/                  # Automated tests
+│   ├── test_scanner.py
+│   ├── test_database.py
+│   └── test_search.py
+├── docs/                   # Documentation
+├── main.py                 # Entry point
+├── requirements.txt        # Python dependencies
+└── README.md              # Project overview
+```
+
+### How It Works
+
+1. **User runs**: `python main.py scan "C:\Documents"`
+
+2. **scanner.py**:
+   - Walks through folders recursively
+   - Finds every file
+   - Extracts: filename, size, type, modification date
+
+3. **database.py**:
+   - Takes file metadata
+   - Stores in SQLite database (`data/tigermemory.db`)
+   - Creates organized tables and indices
+
+4. **search.py**:
+   - Queries the database
+   - Filters by filename, type, size, date
+   - Formats results for display
+
+5. **export.py**:
+   - Takes search results
+   - Converts to JSON or CSV
+   - Saves to file
+
+### Key Concepts
+
+**Metadata**:
+Information ABOUT files, not the files themselves:
+- Filename: `report.pdf`
+- Size: `2048000` bytes
+- Type: `document`
+- Modified: `2024-07-11 14:30:00`
+
+**File Type Categories**:
+Grouped by extension:
+- `.pdf` → `document`
+- `.jpg` → `image`
+- `.py` → `code`
+
+**Database (SQLite)**:
+A local database file (`tigermemory.db`):
+- Stores all metadata
+- Enables fast searches
+- No server needed
+
+### Running Tests
+
+Verify everything works:
+
+```bash
+pytest tests/ -v
+```
+
+Expected output:
+```
+test_database.py::test_database_init PASSED
+test_database.py::test_add_file PASSED
+test_scanner.py::test_get_file_type PASSED
+...
+```
+
+If all say `PASSED`, your setup is correct.
+
+---
+
+## Next Steps
+
+### Immediate (Next 1-2 Hours)
+
+1. ✅ Install Python and TigerMemory
+2. ✅ Scan a small test folder
+3. ✅ Try basic searches
+4. ✅ Export to JSON
+5. Learn by reading the code comments
+
+### Short Term (This Week)
+
+1. Scan your actual Documents folder
+2. Try different search filters
+3. Read through `src/` files and their docstrings
+4. Modify a search function to add custom filtering
+5. Run tests: `pytest tests/ -v`
+
+### Medium Term (Next Weeks)
+
+1. Study `ARCHITECTURE.md` for Version 1 planning
+2. Think about what Version 1 features you want:
+   - Manual tagging system?
+   - File relationships?
+   - Smart categorization?
+3. Start planning Version 1 implementation
+
+### Long Term (Future)
+
+- **Version 1**: Add tagging and relationships
+- **Version 2**: Integrate Ollama for AI-powered search
+- **Version 3**: Build a full knowledge graph
+
+---
+
+## Learning Path
+
+### Beginner Level (You Are Here)
+
+- Run scans
+- Use search filters
+- Export data
+- Understand basic workflow
+
+**Time**: 1-2 hours
+
+### Intermediate Level (Next)
+
+- Read Python code
+- Understand database schema
+- Modify search filters
+- Write simple custom searches
+- Run and modify tests
+
+**Time**: 4-8 hours
+
+### Advanced Level (Later)
+
+- Design new features
+- Add Ollama integration
+- Build relationships between files
+- Implement knowledge graph
+
+**Time**: Weeks/months
+
+---
+
+## Tips for Success
+
+### 1. Start Small
+
+Don't scan 100,000 files immediately. Test with:
+- A test folder (10-50 files)
+- One subfolder of Documents
+- Then scale up
+
+### 2. Keep Notes
+
+As you learn, keep notes:
+- What searches are most useful?
+- What files are hard to find?
+- What features would help?
+
+### 3. Explore the Code
+
+Read the comments in `src/` files:
+```bash
+cat src/scanner.py  # macOS/Linux
+type src\scanner.py  # Windows
+```
+
+Code is educational — learn how it works.
+
+### 4. Ask Questions
+
+When confused:
+1. Check this guide
+2. Read code comments
+3. Run tests: `pytest tests/ -v -s`
+4. Read DEVELOPMENT.md
+
+### 5. Back Up Your Database
+
+Before major changes, copy your database:
+
+```bash
+cp data/tigermemory.db data/tigermemory_backup.db  # macOS/Linux
+copy data\tigermemory.db data\tigermemory_backup.db  # Windows
+```
+
+---
+
+## Glossary
+
+| Term | Meaning |
+|------|---------|
+| **Database** | File (`tigermemory.db`) storing all your indexed metadata |
+| **Metadata** | Information about files (name, size, type, date) |
+| **Index** | The organized collection of all files in the database |
+| **Schema** | The structure/design of the database tables |
+| **Query** | A question asked to the database (e.g., "find all PDFs") |
+| **Export** | Save search results to JSON or CSV file |
+| **CLI** | Command-line interface (terminal/command prompt) |
+| **SQLite** | Lightweight local database (no server needed) |
+| **JSON** | Human-readable data format (easy to read/edit) |
+| **CSV** | Spreadsheet format (opens in Excel/Sheets) |
+
+---
+
+## Quick Reference Card
+
+### Common Commands
+
+```bash
+# Initialize database
+python -c "from src import database; database.init()"
+
+# Scan a folder
+python main.py scan "C:\Users\You\Documents"
+
+# Search by name
+python -c "from src import search; search.print_results(search.search('budget'))"
+
+# Search by type
+python -c "from src import search; search.print_results(search.filter_by_type('image'))"
+
+# Get statistics
+python -c "from src import database; print(database.stats())"
+
+# Export to JSON
+python -c "from src import export; export.export_all_json('backup.json')"
+
+# Run tests
+pytest tests/ -v
+
+# Delete database (fresh start)
+rm data/tigermemory.db
+```
+
+---
+
+## Support Resources
+
+### Built-in Help
+
+1. **README.md** — Project overview
+2. **ARCHITECTURE.md** — System design
+3. **GETTING_STARTED.md** — Quick start
+4. **DEVELOPMENT.md** — Development guidelines
+5. **Code comments** — Read `src/*.py` files
+
+### External Resources
+
+- **Python docs**: https://docs.python.org/3/
+- **SQLite docs**: https://www.sqlite.org/docs.html
+- **Ollama** (for future integration): https://ollama.ai/
+
+---
+
+## Final Checklist
+
+Before you begin, verify:
+
+- [ ] Python 3.9+ installed (`python --version`)
+- [ ] In TigerMemory root folder (`ls main.py` works)
+- [ ] Dependencies installed (`pip install -r requirements.txt`)
+- [ ] Database initialized (`python -c "from src import database; database.init()"`)
+- [ ] First scan works on test folder
+- [ ] Tests pass (`pytest tests/ -v`)
+- [ ] Search works on scanned data
+
+You're ready to explore!
+
+---
+
+**Questions or issues?** Review the relevant section above or read the code comments in `src/`.
+
+**Next action**: Run your first scan!
+
+```bash
+python main.py scan "your_test_folder"
+```
+
+Happy indexing! 🚀
 
